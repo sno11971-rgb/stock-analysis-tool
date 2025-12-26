@@ -287,7 +287,7 @@ def get_available_models(api_key):
 # --- 側邊欄設定 ---
 st.sidebar.header("🔑 設定與輸入")
 
-# 1. 取得 API Key (放最上面)
+# 1. 取得 API Key (放最上面) 
 loaded_from_secrets = False 
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
