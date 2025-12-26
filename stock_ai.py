@@ -11,7 +11,7 @@ import re
 # 1. 忽略 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 【修改點 1】設定頁面配置
+# 設定頁面配置
 st.set_page_config(
     page_title="牛大鼻深度分析", 
     page_icon="📈", 
@@ -19,8 +19,10 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# 【修改點 2】修改頁面主標題
-st.title("📈 牛大鼻深度分析")
+# 【修改點】將 st.title 改為 st.header，字體會變小一點
+st.header("📈 牛大鼻深度分析")
+# st.markdown("### 📈 牛大鼻深度分析") # 如果覺得還不夠小，可以改用這一行 (H3大小)
+
 st.markdown("整合 **EPS/營收**、**殖利率**、**KD指標** 與 **均線**。內建 **模型偵測** 功能，徹底解決 404 問題。")
 
 # --- 1. Yahoo 爬蟲 (EPS + 股價 + 產業) ---
@@ -270,7 +272,7 @@ def analyze_with_gemini_dynamic(api_key, model_name, company, eps_diff_pct, div_
     except Exception as e:
         return f"連線失敗"
 
-# --- 偵測模型函數 (與您的 check_key.py 邏輯一致) ---
+# --- 偵測模型函數 ---
 def get_available_models(api_key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
@@ -285,42 +287,22 @@ def get_available_models(api_key):
 # --- 側邊欄設定 ---
 st.sidebar.header("🔑 設定與輸入")
 
-# 【關鍵修改】: 優先從 Streamlit Cloud 的 Secrets 讀取
-# 只要您在雲端後台設定了 GEMINI_API_KEY，這裡就會自動抓到
+# 1. 取得 API Key (放最上面)
+loaded_from_secrets = False 
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
-    st.sidebar.success("已從系統設定載入 API Key 🔑")
-    use_ai_default = True # 如果有 Key，預設開啟 AI
+    loaded_from_secrets = True 
+    use_ai_default = True 
 else:
-    # 如果雲端沒設定，或是本機沒有 secrets.toml，就顯示輸入框
     api_key = st.sidebar.text_input("Gemini API Key", type="password")
     use_ai_default = False
 
+# 2. AI 功能開關 (放最上面)
 use_ai = st.sidebar.checkbox("開啟 AI 分析功能", value=use_ai_default)
 
-if use_ai:
-    st.sidebar.markdown("---")
-    
-    # 預設清單 (若偵測失敗才用)
-    if 'model_list' not in st.session_state: 
-        st.session_state['model_list'] = ["gemini-1.5-flash", "gemini-pro"]
-    
-    # 【關鍵按鈕】使用跟 check_key.py 一樣的邏輯來填入下拉選單
-    if st.sidebar.button("🔄 1. 偵測可用模型 (必按)"):
-        with st.spinner("連線確認中..."):
-            detected = get_available_models(api_key)
-            if detected:
-                st.session_state['model_list'] = detected
-                st.sidebar.success(f"成功！找到 {len(detected)} 個可用模型")
-            else:
-                st.sidebar.error("偵測失敗，請檢查 Key")
-    
-    # 讓使用者選模型
-    model_option = st.sidebar.selectbox("2. 選擇模型", st.session_state['model_list'], index=0)
-else:
-    model_option = None
-
 st.sidebar.divider()
+
+# 3. 輸入方式與股票代碼 (放在中間)
 input_method = st.sidebar.radio("選擇輸入方式", ["直接輸入代號", "上傳 Excel/CSV"])
 stock_codes = []
 
@@ -339,6 +321,55 @@ elif input_method == "上傳 Excel/CSV":
             stock_codes = df[target].dropna().astype(str).tolist()
             st.sidebar.success(f"讀取 {len(stock_codes)} 筆")
         except: st.sidebar.error("讀取失敗")
+
+st.sidebar.divider()
+
+# 4. AI 模型偵測與選擇 (維持在最下方)
+model_option = None # 先初始化變數，避免錯誤
+
+if use_ai:
+    # 初始化 Session State
+    if 'model_list' not in st.session_state: 
+        st.session_state['model_list'] = ["gemini-1.5-flash", "gemini-pro"]
+    if 'is_detected' not in st.session_state:
+        st.session_state['is_detected'] = False
+
+    # 封裝偵測函數
+    def run_model_detection():
+        with st.spinner("正在自動連接 Google 取得模型清單..."):
+            detected = get_available_models(api_key)
+            if detected:
+                st.session_state['model_list'] = detected
+                st.session_state['is_detected'] = True
+                return True, len(detected)
+            else:
+                return False, 0
+
+    # 自動執行邏輯
+    if api_key and not st.session_state['is_detected']:
+        success, count = run_model_detection()
+        if success:
+            st.sidebar.success(f"已自動載入 {count} 個模型 ✅")
+
+    # 手動按鈕
+    if st.sidebar.button("🔄 手動重新偵測模型"):
+        success, count = run_model_detection()
+        if success:
+            st.sidebar.success(f"成功！找到 {count} 個可用模型")
+        else:
+            st.sidebar.error("偵測失敗，請檢查 Key")
+    
+    # 選擇模型
+    options = st.session_state['model_list']
+    idx = 0
+    if "gemini-1.5-flash" in options:
+        idx = options.index("gemini-1.5-flash")
+    model_option = st.sidebar.selectbox("2. 選擇模型", options, index=idx)
+
+# 5. Secrets 載入成功訊息 (維持在最底部)
+if loaded_from_secrets:
+    st.sidebar.markdown("---") 
+    st.sidebar.success("已從系統設定載入 API Key 🔑")
 
 # --- 主程式 ---
 if stock_codes:
