@@ -8,12 +8,13 @@ import json
 import re
 
 # --- 設定區 ---
-# 忽略 SSL 警告
+# 1. 忽略 SSL 警告 (這是您能連線成功的關鍵)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 st.set_page_config(page_title="台股全方位分析機", page_icon="📈", layout="wide")
 
-st.title("📈 台股全方位分析 (簡潔顏色版)")
-st.markdown("整合 **EPS/營收成長率 (%)**、**殖利率** 與 **KD指標**，提供最直觀的 **紅綠變色** 視覺分析。")
+st.title("📈 台股全方位分析 (完美整合版)")
+st.markdown("整合 **EPS/營收**、**殖利率**、**KD指標** 與 **均線**。內建 **模型偵測** 功能，徹底解決 404 問題。")
 
 # --- 1. Yahoo 爬蟲 (EPS + 股價 + 產業) ---
 def get_yahoo_basic_data(session, stock_code):
@@ -39,11 +40,9 @@ def get_yahoo_basic_data(session, stock_code):
     }
 
     try:
-        # --- A. 抓 EPS 頁面 ---
         res_eps = session.get(url_eps, headers=headers, verify=False, timeout=10)
         soup_eps = BeautifulSoup(res_eps.text, 'html.parser')
 
-        # 1. 公司名稱
         title_text = soup_eps.title.string if soup_eps.title else ""
         if stock_code in title_text:
             if "(" in title_text:
@@ -54,7 +53,6 @@ def get_yahoo_basic_data(session, stock_code):
         else:
             data["公司"] = stock_code 
 
-        # 2. 股價
         try:
             price_span = soup_eps.find('span', class_=re.compile(r'Fz\(32px\)'))
             if price_span:
@@ -63,7 +61,6 @@ def get_yahoo_basic_data(session, stock_code):
         except:
             pass
 
-        # 3. EPS 數據
         targets = [
             ("2024", "Q1"), ("2024", "Q2"), ("2024", "Q3"), ("2024", "Q4"),
             ("2025", "Q1"), ("2025", "Q2"), ("2025", "Q3")
@@ -98,7 +95,6 @@ def get_yahoo_basic_data(session, stock_code):
         data["2024 EPS"] = round(data["2024 EPS"], 2)
         data["2025(Q1~Q3)"] = round(data["2025(Q1~Q3)"], 2)
 
-        # --- B. 抓 主頁 (為了產業別) ---
         try:
             res_main = session.get(url_main, headers=headers, verify=False, timeout=10)
             soup_main = BeautifulSoup(res_main.text, 'html.parser')
@@ -118,11 +114,15 @@ def get_yahoo_basic_data(session, stock_code):
         data["EPS狀態"] = f"錯誤: {str(e)}"
         return data
 
-# --- 2. KD 指標計算 ---
-def get_kd_data(session, stock_code):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_code}.TW?interval=1d&range=3mo"
+# --- 2. 技術指標 (KD + 均線) ---
+def get_technical_data(session, stock_code):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{stock_code}.TW?interval=1d&range=1y"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    result = {"K值": 0.0, "D值": 0.0}
+    
+    result = {
+        "K值": 0.0, "D值": 0.0,
+        "5MA": 0.0, "10MA": 0.0, "20MA": 0.0, "120MA": 0.0
+    }
     
     try:
         response = session.get(url, headers=headers, verify=False, timeout=10)
@@ -142,24 +142,34 @@ def get_kd_data(session, stock_code):
             if i < 8:
                 k_list.append(50); d_list.append(50)
                 continue
-            
             window_high = max(df['High'][i-8:i+1])
             window_low = min(df['Low'][i-8:i+1])
             close = df['Close'].iloc[i]
-            
             if window_high == window_low: rsv = 50
             else: rsv = (close - window_low) / (window_high - window_low) * 100
-            
             k = (2/3) * k + (1/3) * rsv
             d = (2/3) * d + (1/3) * k
             k_list.append(k); d_list.append(d)
             
         result["K值"] = round(k_list[-1], 2)
         result["D值"] = round(d_list[-1], 2)
+        
+        # MA 計算
+        df['5MA'] = df['Close'].rolling(window=5).mean()
+        df['10MA'] = df['Close'].rolling(window=10).mean()
+        df['20MA'] = df['Close'].rolling(window=20).mean()
+        df['120MA'] = df['Close'].rolling(window=120).mean()
+        
+        last_row = df.iloc[-1]
+        result["5MA"] = round(last_row['5MA'], 2) if not pd.isna(last_row['5MA']) else 0.0
+        result["10MA"] = round(last_row['10MA'], 2) if not pd.isna(last_row['10MA']) else 0.0
+        result["20MA"] = round(last_row['20MA'], 2) if not pd.isna(last_row['20MA']) else 0.0
+        result["120MA"] = round(last_row['120MA'], 2) if not pd.isna(last_row['120MA']) else 0.0
+
     except: pass
     return result
 
-# --- 3. CMoney 股利爬蟲 ---
+# --- 3. CMoney 股利 ---
 def get_dividend_data_cmoney(session, stock_code):
     url = f"https://www.cmoney.tw/forum/stock/{stock_code}?s=dividend"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -171,20 +181,16 @@ def get_dividend_data_cmoney(session, stock_code):
         for df in dfs:
             if "現金股利" in str(df.columns) and "股票股利" in str(df.columns):
                 target_df = df; break
-        
         if target_df is not None and not target_df.empty:
             row = target_df.iloc[0].tolist()
             try: result["現金股利"] = float(str(row[1]).replace('-', '0'))
             except: pass
-            
             if len(row) > 2 and re.match(r'202\d/\d{2}/\d{2}', str(row[2])):
                 result["除息日"] = str(row[2])
-            
             flat_cols = [''.join(str(col)).replace(' ', '') for col in target_df.columns.values]
             stock_idx = -1
             for i, c in enumerate(flat_cols):
                 if "股票股利" in c and "股" in c: stock_idx = i; break
-            
             if stock_idx != -1:
                 try: result["股票股利"] = float(str(row[stock_idx]).replace('-', '0'))
                 except: pass
@@ -194,7 +200,7 @@ def get_dividend_data_cmoney(session, stock_code):
         return result
     except: return result
 
-# --- 4. Yahoo 營收爬蟲 ---
+# --- 4. Yahoo 營收 ---
 def get_revenue_data_yahoo(session, stock_code):
     url = f"https://tw.stock.yahoo.com/quote/{stock_code}.TW/revenue"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -205,26 +211,24 @@ def get_revenue_data_yahoo(session, stock_code):
         list_items = soup.find_all('li')
         targets_2024 = ["2024/10", "2024/11", "113/10", "113/11"]
         targets_2025 = ["2025/10", "2025/11", "114/10", "114/11"]
-        
         for li in list_items:
             cols = [d.get_text(strip=True) for d in li.find_all('div', recursive=False)]
             if len(cols) < 2: 
                 cols = li.get_text(" ", strip=True).split(" ")
                 if len(cols) < 2: continue
-            
             date_col = cols[0]
             try: revenue = float(cols[1].replace(',', '').replace('-', '0'))
             except: continue
-            
             if any(t in date_col for t in targets_2024): result["2024 Q4營收"] += revenue
             if any(t in date_col for t in targets_2025): result["2025 Q4營收"] += revenue
     except: pass 
     return result
 
-# --- 5. AI 分析函數 ---
-def analyze_with_gemini(api_key, model_name, company, eps_diff_pct, div_data, yield_rate, rev_diff_pct, kd_k, kd_d, industry):
+# --- 5. AI 分析函數 (動態模型) ---
+def analyze_with_gemini_dynamic(api_key, model_name, company, eps_diff_pct, div_data, yield_rate, rev_diff_pct, kd_k, kd_d, industry):
     if not api_key: return "未輸入 API Key"
     
+    # 直接使用偵測到的有效模型名稱
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
     kd_status = "黃金交叉" if kd_k > kd_d else "死亡交叉"
@@ -244,38 +248,60 @@ def analyze_with_gemini(api_key, model_name, company, eps_diff_pct, div_data, yi
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
 
-    for _ in range(2):
-        try:
-            res = requests.post(url, headers=headers, data=json.dumps(payload), verify=False, timeout=15)
-            if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text']
-            elif res.status_code == 429: time.sleep(20); continue
-        except: pass
-    return "AI 忙碌中"
+    try:
+        res = requests.post(url, headers=headers, data=json.dumps(payload), verify=False, timeout=15)
+        
+        if res.status_code == 200:
+            return res.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            try:
+                err = res.json()['error']['message']
+                return f"Err {res.status_code}: {err[:15]}..."
+            except:
+                return f"Err {res.status_code}"
+                
+    except Exception as e:
+        return f"連線失敗"
 
+# --- 偵測模型函數 (與您的 check_key.py 邏輯一致) ---
 def get_available_models(api_key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
         res = requests.get(url, verify=False, timeout=5)
         if res.status_code == 200:
-            return [m['name'].replace('models/', '') for m in res.json().get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
+            data = res.json()
+            # 抓出支援 generateContent 的模型名稱 (移除 models/ 前綴)
+            return [m['name'].replace('models/', '') for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
     except: pass
     return []
 
 # --- 側邊欄設定 ---
 st.sidebar.header("🔑 設定與輸入")
-default_key = "AIzaSyAwPOQh3_nMzN_OtHc_cvexBqzj6AkdUyE"
-api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password")
 
-use_ai = st.sidebar.checkbox("開啟 AI 分析功能", value=False)
+# 您的專屬 Key
+default_key = "AIzaSyCWLdOhjxL2VX9oEOovXU39GSp6ptLaHRI"
+api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password")
+use_ai = st.sidebar.checkbox("開啟 AI 分析功能", value=True)
 
 if use_ai:
-    if 'model_list' not in st.session_state: st.session_state['model_list'] = ["gemini-1.5-flash", "gemini-1.0-pro"]
-    if st.sidebar.button("🔄 偵測可用模型"):
-        with st.spinner("查詢中..."):
+    st.sidebar.markdown("---")
+    
+    # 預設清單 (若偵測失敗才用)
+    if 'model_list' not in st.session_state: 
+        st.session_state['model_list'] = ["gemini-1.5-flash", "gemini-pro"]
+    
+    # 【關鍵按鈕】使用跟 check_key.py 一樣的邏輯來填入下拉選單
+    if st.sidebar.button("🔄 1. 偵測可用模型 (必按)"):
+        with st.spinner("連線確認中..."):
             detected = get_available_models(api_key)
-            if detected: st.session_state['model_list'] = detected; st.sidebar.success(f"找到 {len(detected)} 個")
-            else: st.sidebar.error("偵測失敗")
-    model_option = st.sidebar.selectbox("選擇模型", st.session_state['model_list'], index=0)
+            if detected:
+                st.session_state['model_list'] = detected
+                st.sidebar.success(f"成功！找到 {len(detected)} 個可用模型")
+            else:
+                st.sidebar.error("偵測失敗，請檢查 Key")
+    
+    # 讓使用者選模型
+    model_option = st.sidebar.selectbox("2. 選擇模型", st.session_state['model_list'], index=0)
 else:
     model_option = None
 
@@ -315,8 +341,10 @@ if stock_codes:
             row.update(div_data)
             rev_data = get_revenue_data_yahoo(session, code)
             row.update(rev_data)
-            kd_data = get_kd_data(session, code)
-            row.update(kd_data)
+            
+            # 技術指標 (KD + 均線)
+            tech_data = get_technical_data(session, code)
+            row.update(tech_data)
             
             # --- 數據計算 ---
             rev_24 = row["2024 Q4營收"]
@@ -345,17 +373,18 @@ if stock_codes:
                 else:
                     row["EPS 差異(%)"] = 0.0
                 
-                if use_ai and api_key:
+                # AI 分析
+                if use_ai and api_key and model_option:
                     status.text(f"分析中: {code}...")
-                    anl = analyze_with_gemini(
+                    anl = analyze_with_gemini_dynamic(
                         api_key, model_option, row["公司"], 
                         row["EPS 差異(%)"], div_data, row["還原殖利率(%)"], row["營收差異(%)"],
                         row["K值"], row["D值"], row["產業別"]
                     )
                     row["AI 分析"] = anl
-                    if "429" not in anl: time.sleep(4)
+                    if "Err" not in anl: time.sleep(4)
                 else:
-                    row["AI 分析"] = "未開啟" if not use_ai else "無Key"
+                    row["AI 分析"] = "未開啟" if not use_ai else "請先偵測模型"
                     time.sleep(0.5)
             else:
                  row["EPS 差異(%)"] = 0.0
@@ -369,9 +398,10 @@ if stock_codes:
         if results:
             df_result = pd.DataFrame(results)
             
-            # 定義欄位順序 (已移除 "選取")
+            # 更新欄位順序 (加入均線)
             cols = ["股票代碼", "公司", "產業別", "股價", 
-                    "K值", "D值", "還原殖利率(%)",
+                    "K值", "D值", "5MA", "10MA", "20MA", "120MA",
+                    "還原殖利率(%)",
                     "2024(Q1~Q3)", "2025(Q1~Q3)", "EPS 差異(%)", "2024 EPS",
                     "2024 Q4營收", "2025 Q4營收", "營收差異(%)",
                     "現金股利", "股票股利", "AI 分析"]
@@ -379,27 +409,22 @@ if stock_codes:
             cols = [c for c in cols if c in df_result.columns]
             df_result = df_result[cols]
             
-            # --- 樣式設定 (Pandas Style) ---
             def highlight_color(row):
                 styles = [''] * len(row)
-                
                 def get_idx(col_name):
                     try: return row.index.get_loc(col_name)
                     except: return -1
 
-                # 1. 殖利率 > 5% 變紅粗
                 idx = get_idx('還原殖利率(%)')
                 if idx != -1 and isinstance(row['還原殖利率(%)'], (int, float)) and row['還原殖利率(%)'] > 5:
                     styles[idx] = 'color: red; font-weight: bold'
                 
-                # 2. 成長率 (EPS, 營收) 正紅負綠
                 for col in ['EPS 差異(%)', '營收差異(%)']:
                     idx = get_idx(col)
                     if idx != -1 and isinstance(row[col], (int, float)):
                         if row[col] > 0: styles[idx] = 'color: red'
                         elif row[col] < 0: styles[idx] = 'color: green'
                 
-                # 3. KD 黃金/死亡交叉
                 k_idx = get_idx('K值')
                 d_idx = get_idx('D值')
                 if k_idx != -1 and d_idx != -1:
@@ -407,20 +432,16 @@ if stock_codes:
                     d_val = row['D值']
                     if k_val == 0: k_val = 50
                     if d_val == 0: d_val = 50
-                    
                     if k_val > d_val:
                         styles[k_idx] = 'color: red'
                         styles[d_idx] = 'color: red'
                     else:
                         styles[k_idx] = 'color: green'
                         styles[d_idx] = 'color: green'
-                        
                 return styles
 
-            # 應用樣式
             styled_df = df_result.style.apply(highlight_color, axis=1)
             
-            # --- 顯示表格 ---
             st.dataframe(
                 styled_df,
                 column_config={
@@ -430,8 +451,12 @@ if stock_codes:
                     "2024 Q4營收": st.column_config.NumberColumn(format="%d"),
                     "2025 Q4營收": st.column_config.NumberColumn(format="%d"),
                     "股價": st.column_config.NumberColumn(format="%.1f"),
-                    "K值": st.column_config.NumberColumn(format="%.1f"),
-                    "D值": st.column_config.NumberColumn(format="%.1f"),
+                    "K值": st.column_config.NumberColumn(format="%.2f"),
+                    "D值": st.column_config.NumberColumn(format="%.2f"),
+                    "5MA": st.column_config.NumberColumn(format="%.2f"),
+                    "10MA": st.column_config.NumberColumn(format="%.2f"),
+                    "20MA": st.column_config.NumberColumn(format="%.2f"),
+                    "120MA": st.column_config.NumberColumn(format="%.2f"),
                 },
                 use_container_width=True,
                 height=600
