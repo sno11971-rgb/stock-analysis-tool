@@ -12,8 +12,6 @@ import re
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 【修改點 1】設定頁面配置
-# page_title: 修改瀏覽器分頁標籤名稱
-# initial_sidebar_state="expanded": 設定左側欄預設展開 (使用者可點擊箭頭縮起)
 st.set_page_config(
     page_title="牛大鼻深度分析", 
     page_icon="📈", 
@@ -287,15 +285,18 @@ def get_available_models(api_key):
 # --- 側邊欄設定 ---
 st.sidebar.header("🔑 設定與輸入")
 
-# 嘗試從 secrets 讀取 Key
+# 【關鍵修改】: 優先從 Streamlit Cloud 的 Secrets 讀取
+# 只要您在雲端後台設定了 GEMINI_API_KEY，這裡就會自動抓到
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("已從系統設定載入 API Key 🔑")
+    use_ai_default = True # 如果有 Key，預設開啟 AI
 else:
-    # 如果沒有設定 secrets，就顯示輸入框讓使用者手動輸入
+    # 如果雲端沒設定，或是本機沒有 secrets.toml，就顯示輸入框
     api_key = st.sidebar.text_input("Gemini API Key", type="password")
+    use_ai_default = False
 
-use_ai = st.sidebar.checkbox("開啟 AI 分析功能", value=True)
+use_ai = st.sidebar.checkbox("開啟 AI 分析功能", value=use_ai_default)
 
 if use_ai:
     st.sidebar.markdown("---")
