@@ -8,12 +8,21 @@ import json
 import re
 
 # --- 設定區 ---
-# 1. 忽略 SSL 警告 (這是您能連線成功的關鍵)
+# 1. 忽略 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="台股全方位分析機", page_icon="📈", layout="wide")
+# 【修改點 1】設定頁面配置
+# page_title: 修改瀏覽器分頁標籤名稱
+# initial_sidebar_state="expanded": 設定左側欄預設展開 (使用者可點擊箭頭縮起)
+st.set_page_config(
+    page_title="牛大鼻深度分析", 
+    page_icon="📈", 
+    layout="wide",
+    initial_sidebar_state="expanded" 
+)
 
-st.title("📈 台股全方位分析 (完美整合版)")
+# 【修改點 2】修改頁面主標題
+st.title("📈 牛大鼻深度分析")
 st.markdown("整合 **EPS/營收**、**殖利率**、**KD指標** 與 **均線**。內建 **模型偵測** 功能，徹底解決 404 問題。")
 
 # --- 1. Yahoo 爬蟲 (EPS + 股價 + 產業) ---
@@ -278,9 +287,14 @@ def get_available_models(api_key):
 # --- 側邊欄設定 ---
 st.sidebar.header("🔑 設定與輸入")
 
-# 您的專屬 Key
-default_key = "AIzaSyCWLdOhjxL2VX9oEOovXU39GSp6ptLaHRI"
-api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password")
+# 嘗試從 secrets 讀取 Key
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    st.sidebar.success("已從系統設定載入 API Key 🔑")
+else:
+    # 如果沒有設定 secrets，就顯示輸入框讓使用者手動輸入
+    api_key = st.sidebar.text_input("Gemini API Key", type="password")
+
 use_ai = st.sidebar.checkbox("開啟 AI 分析功能", value=True)
 
 if use_ai:
